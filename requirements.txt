@@ -1,0 +1,8 @@
+fastapi
+uvicorn
+together
+pydantic
+python-dotenv
+email-validator
+requests
+curl_cffi
