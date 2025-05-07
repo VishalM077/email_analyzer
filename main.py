@@ -2,9 +2,10 @@ import requests
 from fastapi import FastAPI, HTTPException, status
 from pydantic import BaseModel, EmailStr, Field
 from typing import Dict, Any, List, Optional
-from email_agent import analyze_email, extract_entities, SentimentEnum, UrgencyEnum, IntentEnum
+from email_agent import analyze_email, extract_entities
 import logging
 import time
+import json
 
 # Configure logging
 logging.basicConfig(
@@ -37,6 +38,7 @@ class EmailRequest(BaseModel):
 
 class EmailContentRequest(BaseModel):
     email_content: str = Field(..., min_length=1, max_length=10500, description="The complete email content including subject and body")
+    details_provided: Optional[Dict[str, Any]] = Field(None, description="Optional additional details to include in the reply")
 
 # Define the response models with enhanced fields
 class EntityExtractionResponse(BaseModel):
@@ -113,11 +115,12 @@ async def extract_entities_endpoint(email_request: EmailRequest):
 @app.post("/generate_reply", response_model=ReplyGenerationResponse, status_code=status.HTTP_200_OK)
 async def generate_reply_endpoint(email_content: EmailContentRequest):
     """
-    Generates a reply based on the email content.
+    Generates a reply based on the email content and optional details.
     
     The reply generation:
     - Acknowledges the specific issue
     - References any incident numbers
+    - Includes provided details if available
     - Indicates investigation will occur
     - Uses information already available
     """
@@ -125,8 +128,15 @@ async def generate_reply_endpoint(email_content: EmailContentRequest):
         start_time = time.time()
         logger.info("Generating reply for email content")
         
-        # Generate reply using the email content
-        analysis = analyze_email(email_content.email_content)
+        # Prepare the full content for the LLM with clear separation
+        full_content = f"""Email Content:
+{email_content.email_content}
+
+Additional Details:
+{json.dumps(email_content.details_provided, indent=2) if email_content.details_provided else "No additional details provided"}"""
+        
+        # Generate reply using the full content
+        analysis = analyze_email(full_content)
         
         # Extract and normalize the response content
         response_content = analysis.get("generated_reply", "Could not generate a reply.")
