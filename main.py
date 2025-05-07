@@ -2,7 +2,7 @@ import requests
 from fastapi import FastAPI, HTTPException, status
 from pydantic import BaseModel, EmailStr, Field
 from typing import Dict, Any, List, Optional
-from email_agent import analyze_email, SentimentEnum, UrgencyEnum, IntentEnum
+from email_agent import analyze_email, extract_entities, SentimentEnum, UrgencyEnum, IntentEnum
 import logging
 import time
 
@@ -24,7 +24,7 @@ app = FastAPI(
     version="1.0.0",
 )
 
-# Define the request model with validation
+# Define the request models with validation
 class EmailRequest(BaseModel):
     email_subject: str = Field(..., min_length=1, max_length=500, description="The subject line of the email")
     email_body: str = Field(..., min_length=1, max_length=10000, description="The main content of the email")
@@ -35,19 +35,23 @@ class EmailRequest(BaseModel):
         description="Optional additional context for ServiceNow ticket creation"
     )
 
-# Define the response model with enhanced fields
-class EmailResponse(BaseModel):
+class EmailContentRequest(BaseModel):
+    email_content: str = Field(..., min_length=1, max_length=10500, description="The complete email content including subject and body")
+
+# Define the response models with enhanced fields
+class EntityExtractionResponse(BaseModel):
     intent: str
     sentiment: str
     urgency: str
     keywords: List[str]
-    summary: str
     entities: Dict[str, Any]
+
+class ReplyGenerationResponse(BaseModel):
     generated_reply: str
 
 @app.get("/")
 async def root():
-    return {"message": "Email Analysis API is running. Send POST requests to /generate_reply"}
+    return {"message": "Email Analysis API is running. Send POST requests to /extract_entities or /generate_reply"}
 
 @app.get("/health")
 async def health_check():
@@ -58,10 +62,10 @@ async def health_check():
         "version": "1.0.0"
     }
 
-@app.post("/generate_reply", response_model=EmailResponse, status_code=status.HTTP_200_OK)
-async def generate_reply(email_request: EmailRequest):
+@app.post("/extract_entities", response_model=EntityExtractionResponse, status_code=status.HTTP_200_OK)
+async def extract_entities_endpoint(email_request: EmailRequest):
     """
-    Analyzes an email and generates a suggested reply based on its content.
+    Analyzes an email and extracts entities, intent, sentiment, urgency, and keywords.
     
     The analysis includes:
     - Intent detection (question, request, etc.)
@@ -69,7 +73,6 @@ async def generate_reply(email_request: EmailRequest):
     - Urgency assessment
     - Keyword extraction
     - Entity recognition (dates, order numbers, etc.)
-    - Email summarization
     """
     try:
         start_time = time.time()
@@ -87,43 +90,62 @@ async def generate_reply(email_request: EmailRequest):
             "additional_details": email_request.additional_details
         }
 
-        # Use the enhanced analyzer
-        analysis = analyze_email(email_text, additional_details=email_request.additional_details, request_data=request_data)
-
-        # Extract and normalize the response content
-        response_content = analysis.get("generated_reply", "Could not generate a reply.")
+        # Extract entities and basic analysis
+        analysis = extract_entities(email_text, additional_details=email_request.additional_details, request_data=request_data)
         
-        # Ensure response_content is a string, if it's a dict, extract the body
-        if isinstance(response_content, dict):
-            response_content = response_content.get("body", str(response_content))
-
         # Return properly structured response with all the enhanced fields
-        result = EmailResponse(
+        result = EntityExtractionResponse(
             intent=analysis.get("intent", "Other"),
             sentiment=analysis.get("sentiment", "Neutral"),
             urgency=analysis.get("urgency", "Medium"),
             keywords=analysis.get("keywords", [])[:5],  # Limit to max 5 keywords
-            summary=analysis.get("summary", ""),
-            entities=analysis.get("entities", {}),
-            generated_reply=response_content
+            entities=analysis.get("entities", {})
         )
         
         processing_time = time.time() - start_time
         logger.info(f"Email processed in {processing_time:.2f} seconds. Intent: {result.intent}, Urgency: {result.urgency}")
         
         return result
-    except KeyError as e:
-        logger.error(f"Missing expected key: {str(e)}")
-        # Handling missing keys in the analysis response
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Missing expected key: {str(e)}")
-    except ValueError as e:
-        logger.error(f"Invalid response structure: {str(e)}")
-        # Handling malformed response
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Invalid response structure: {str(e)}")
     except Exception as e:
         logger.error(f"Unexpected error: {str(e)}", exc_info=True)
-        # General error handling
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Error processing the request: {str(e)}")
+
+@app.post("/generate_reply", response_model=ReplyGenerationResponse, status_code=status.HTTP_200_OK)
+async def generate_reply_endpoint(email_content: EmailContentRequest):
+    """
+    Generates a reply based on the email content.
+    
+    The reply generation:
+    - Acknowledges the specific issue
+    - References any incident numbers
+    - Indicates investigation will occur
+    - Uses information already available
+    """
+    try:
+        start_time = time.time()
+        logger.info("Generating reply for email content")
+        
+        # Generate reply using the email content
+        analysis = analyze_email(email_content.email_content)
+        
+        # Extract and normalize the response content
+        response_content = analysis.get("generated_reply", "Could not generate a reply.")
+        
+        # Ensure response_content is a string, if it's a dict, extract the body
+        if isinstance(response_content, dict):
+            response_content = response_content.get("body", str(response_content))
+        
+        result = ReplyGenerationResponse(
+            generated_reply=response_content
+        )
+        
+        processing_time = time.time() - start_time
+        logger.info(f"Reply generated in {processing_time:.2f} seconds")
+        
+        return result
+    except Exception as e:
+        logger.error(f"Unexpected error: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Error generating reply: {str(e)}")
 
 if __name__ == "__main__":
     import uvicorn

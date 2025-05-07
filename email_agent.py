@@ -108,7 +108,7 @@ CUSTOMER_ENTITIES = {
     ]
 }
 
-# Compile regex patterns for entity extraction (imported from email-analyzer-api.py)
+# Compile regex patterns for entity extraction
 ENTITY_PATTERNS = {
     # ServiceNow record identifiers
     "incident_number": re.compile(r"(?:incident|ticket|case)\s+(?:number|#|no|id)?\s*(?:is|:)?\s*[#]?([A-Z0-9]+)", re.IGNORECASE),
@@ -137,7 +137,7 @@ ENTITY_PATTERNS = {
     
     # Technical information
     "url": re.compile(r"https?://\S+", re.IGNORECASE),
-    "error_code": re.compile(r"(?:error|code|error code)\s*(?:is|:)?\s*([A-Z0-9_]+)", re.IGNORECASE),
+    "error_code": re.compile(r"(?:error|code|error code)\s*(?:is|:)?\s*(\d{3}(?:\s*-\s*[A-Za-z]+)?)", re.IGNORECASE),
     "ip_address": re.compile(r"\b(?:\d{1,3}\.){3}\d{1,3}\b", re.IGNORECASE),
     "mac_address": re.compile(r"\b(?:[0-9A-Fa-f]{2}[:-]){5}(?:[0-9A-Fa-f]{2})\b", re.IGNORECASE),
     
@@ -161,6 +161,16 @@ ENTITY_PATTERNS = {
         re.IGNORECASE
     ),
     "state": re.compile(r"(?:state|status)\s+(?:is|:)?\s*(new|in progress|pending|resolved|closed|cancelled)", re.IGNORECASE),
+    
+    # System and equipment information
+    "system_name": re.compile(r"(?:system|application|software|hardware|device|equipment|portal)\s+(?:name|is|:)?\s*([A-Z][a-zA-Z]+(?:\s+[A-Z][a-zA-Z]+)*)", re.IGNORECASE),
+    "equipment_type": re.compile(r"(?:kiosk|terminal|device|equipment|hardware|machine)\s+(?:type|is|:)?\s*([A-Z][a-zA-Z]+(?:\s+[A-Z][a-zA-Z]+)*)", re.IGNORECASE),
+    "issue_impact": re.compile(r"(?:impact|affecting|affects|impacting|impacts)\s+(?:is|:)?\s*([^.,]+)", re.IGNORECASE),
+    "issue_symptoms": re.compile(r"(?:symptoms|behavior|what's happening|what is happening)\s*(?:is|:)?\s*([^.,]+)", re.IGNORECASE),
+    "store_manager": re.compile(r"(?:reported by|reported|manager|supervisor|agent)\s*(?:is|:)?\s*([A-Z][a-z]+(?:\s+[A-Z][a-z]+)*)", re.IGNORECASE),
+    "issue_location": re.compile(r"(?:access|accessing|using|in)\s+(?:the|to)?\s*([A-Z][a-zA-Z]+(?:\s+[A-Z][a-zA-Z]+)*)", re.IGNORECASE),
+    "access_issue": re.compile(r"(?:unable|cannot|cant|can't|failed|failing)\s+(?:to)?\s*(?:access|login|log in|log-in|authenticate|authorize)\s+(?:to|the)?\s*([A-Z][a-zA-Z]+(?:\s+[A-Z][a-zA-Z]+)*)", re.IGNORECASE),
+    "reported_time": re.compile(r"(?:reported|occurred|happened|started)\s+(?:at|time|when)?\s*(\d{1,2}:\d{2}(?::\d{2})?\s*(?:AM|PM|am|pm)?(?:\s+today|\s+yesterday)?)", re.IGNORECASE),
 }
 
 # Define urgency keywords with more comprehensive coverage
@@ -168,7 +178,9 @@ HIGH_URGENCY_KEYWORDS = {
     "urgent", "asap", "immediately", "emergency", "critical",
     "deadline", "today", "tomorrow", "soon", "quickly", "rush",
     "blocking", "outage", "down", "broken", "failed", "error",
-    "cannot", "unable", "stopped", "crashed", "not working"
+    "cannot", "unable", "stopped", "crashed", "not working",
+    "stopped working", "system down", "system outage", "system failure",
+    "immediate assistance", "escalate", "significant impact", "affecting"
 }
 
 MEDIUM_URGENCY_KEYWORDS = {
@@ -183,12 +195,34 @@ INTENT_KEYWORDS = {
         "follow up", "follow-up", "followup", "no update", "haven't been any updates",
         "check status", "status update", "any progress", "still waiting", "escalate"
     },
-    "incident": {"error", "issue", "problem", "broken", "not working", "failed", "crash", "down", "outage"},
-    "request": {"need", "want", "request", "would like", "please", "could you", "can you"},
-    "question": {"?", "how", "what", "when", "where", "why", "who", "which"},
-    "change": {"change", "modify", "update", "alter", "switch", "convert"},
-    "problem": {"root cause", "investigate", "analyze", "troubleshoot", "diagnose"},
-    "information": {"inform", "notify", "update", "status", "progress", "report"}
+    "incident": {
+        "error", "issue", "problem", "broken", "not working", "failed", "crash", "down", "outage",
+        "complaint", "delayed", "refund", "return", "customer complaint", "customer issue",
+        "customer problem", "customer service", "service issue", "service problem",
+        "system outage", "system down", "system failure", "technical issue", "technical problem",
+        "kiosk", "self-checkout", "checkout", "terminal", "device", "equipment", "hardware",
+        "software", "application", "system", "network", "server", "database"
+    },
+    "request": {
+        "need", "want", "request", "would like", "please", "could you", "can you",
+        "install", "setup", "configure", "access", "permission", "approval"
+    },
+    "question": {
+        "?", "how", "what", "when", "where", "why", "who", "which",
+        "can you tell me", "do you know", "could you explain"
+    },
+    "change": {
+        "change", "modify", "update", "alter", "switch", "convert",
+        "upgrade", "downgrade", "replace", "substitute"
+    },
+    "problem": {
+        "root cause", "investigate", "analyze", "troubleshoot", "diagnose",
+        "fix", "resolve", "solution", "workaround"
+    },
+    "information": {
+        "inform", "notify", "update", "status", "progress", "report",
+        "let you know", "advise", "alert", "announce"
+    }
 }
 
 def clean_json_response(content: str) -> str:
@@ -224,7 +258,7 @@ def normalize_business_service(service: str) -> str:
     
     return service
 
-def extract_entities(text: str) -> Dict[str, Any]:
+def extract_entities_from_text(text: str) -> Dict[str, Any]:
     """Extract entities from email text using regex patterns"""
     entities = {}
     
@@ -234,12 +268,20 @@ def extract_entities(text: str) -> Dict[str, Any]:
         if matches:
             # For numeric IDs, convert to string
             if entity_name in ["incident_number", "change_request", "problem_number", "user_id"]:
-                entities[entity_name] = str(matches[0]).upper()
+                # Only include if it's a valid ID format
+                if re.match(r'^[A-Z0-9]+$', str(matches[0])):
+                    entities[entity_name] = str(matches[0]).upper()
             # For business service, normalize to standard service
             elif entity_name == "business_service":
                 normalized_service = normalize_business_service(matches[0])
                 if normalized_service:
                     entities[entity_name] = normalized_service
+            # For dates, ensure proper format
+            elif entity_name == "date":
+                date_str = str(matches[0])
+                # Only include if it's a proper date format
+                if re.match(r'^(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\s+\d{1,2}(?:st|nd|rd|th)?\s*,?\s*\d{4}\b|\b\d{1,2}[/-]\d{1,2}[/-]\d{2,4}\b|\b(?:tomorrow|next week|next month|today|yesterday)\b', date_str, re.IGNORECASE):
+                    entities[entity_name] = date_str
             # For other entities, keep as string
             else:
                 # Clean up the match (remove leading/trailing special chars and newlines)
@@ -254,10 +296,174 @@ def extract_entities(text: str) -> Dict[str, Any]:
                         # Only include if it's a proper location name with a valid suffix
                         if re.match(r'^[A-Z][a-zA-Z]+(?:\s+[A-Z][a-zA-Z]+)*\s+(?:Street|Avenue|Boulevard|Road|Lane|Drive|Court|Place|Square|City|Town|Building|Office|Floor|Room|Suite|Department|Center|Campus|Site|Location|Facility|Headquarters|Branch|Store|Shop|Outlet|Warehouse|Data Center|Server Room|Lab|Laboratory|Workspace|Area|Zone|Region|District|State|Province|Country)$', clean_match, re.IGNORECASE):
                             entities[entity_name] = clean_match
+                    elif entity_name == "request_number":
+                        # Only include if it's a proper request number format
+                        if re.match(r'^[A-Z0-9]+$', clean_match):
+                            entities[entity_name] = clean_match
                     else:
                         entities[entity_name] = clean_match
     
     return entities
+
+def analyze_email_content(text: str, regex_entities: Dict[str, Any]) -> dict:
+    """
+    Analyzes email content using LLM to determine sentiment, intent, urgency, keywords,
+    and extract entities
+    """
+    # Prepare the prompt for the LLM
+    prompt = f"""Analyze this email and extract key information:
+
+Email Content:
+{text}
+
+Please provide a JSON response with the following structure:
+{{
+    "sentiment": "Positive/Neutral/Negative",
+    "urgency": "High/Medium/Low",
+    "keywords": ["keyword1", "keyword2", "keyword3"],
+    "intent": "Request/Information/Question/Task Assignment/Follow-up/Incident/Change/Problem/Other",
+    "entities": {{
+        // Extract ONLY the most relevant and helpful entities that are EXPLICITLY mentioned in the email.
+        // Focus on information that will be useful for ticket creation and issue resolution.
+        // Examples of useful entities:
+        // - incident_number: Incident/ticket numbers (e.g., INC123456)
+        // - error_code: Error codes or messages (e.g., "401", "403 Forbidden")
+        // - system_name: Name of affected system/application
+        // - issue_type: Type of issue (e.g., "Printer Access Issue")
+        // - issue_location: Where the issue is occurring
+        // - employee_name: Name of affected user
+        // - employee_id: Employee ID or number
+        // - reporter_name: Name of person reporting the issue
+        // - reporter_role: Role of person reporting
+        // - sender_email: Email of sender
+        // - recipient_email: Email of recipient
+        // - reported_time: When the issue was reported
+    }}
+}}
+
+CRITICAL RULES:
+1. ONLY include entities that are EXPLICITLY mentioned in the email
+2. DO NOT make assumptions or add information that isn't in the text
+3. DO NOT include any keys with null values
+4. For dates, use the exact format mentioned in the email
+5. DO NOT infer or guess values for any fields
+6. If a field's value is not explicitly stated, DO NOT include that field
+7. Preserve exact case and formatting as mentioned in the email
+8. ONLY include entities that will be helpful for ticket creation and issue resolution
+9. Pay special attention to:
+    - Incident/ticket numbers
+    - Error codes and messages
+    - System names and locations
+    - User information
+    - Reporter information
+    - Communication details
+
+ENTITY EXTRACTION EXAMPLES:
+1. For incident number:
+   Input: "Ticket Number: INC908721"
+   Output: {{"incident_number": "INC908721"}}
+
+2. For error code:
+   Input: "Authentication Failed - Code 401"
+   Output: {{"error_code": "401"}}
+
+3. For reporter information:
+   Input: "Thanks,\nAnita Roy\nIT Support Specialist"
+   Output: {{
+       "reporter_name": "Anita Roy",
+       "reporter_role": "IT Support Specialist"
+   }}
+
+4. For issue details:
+   Input: "network printer on Floor 5"
+   Output: {{
+       "issue_location": "Floor 5",
+       "system_name": "network printer"
+   }}"""
+
+    try:
+        # Try primary model first (Llama-3.3-70B-Instruct-Turbo)
+        response = client.chat.completions.create(
+            model="meta-llama/Llama-3.3-70B-Instruct-Turbo",
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.2,
+            max_tokens=1024,
+            timeout=30,
+        )
+        logger.info("Successfully used primary model (Llama-3.3-70B-Instruct-Turbo)")
+    except Exception as e:
+        logger.error("Primary model failed: %s", str(e))
+        # Try first fallback model
+        logger.info("Attempting to use first fallback model: mistralai/Mistral-7B-Instruct-v0.1")
+        try:
+            response = client.chat.completions.create(
+                model="mistralai/Mistral-7B-Instruct-v0.1",
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0.2,
+                max_tokens=1024,
+                timeout=30,
+            )
+            logger.info("Successfully used first fallback model")
+        except Exception as e2:
+            logger.error("First fallback model failed: %s", str(e2))
+            # Try second fallback model
+            logger.info("Attempting to use second fallback model: togethercomputer/llama-2-7b-chat")
+            try:
+                response = client.chat.completions.create(
+                    model="togethercomputer/llama-2-7b-chat",
+                    messages=[{"role": "user", "content": prompt}],
+                    temperature=0.2,
+                    max_tokens=1024,
+                    timeout=30,
+                )
+                logger.info("Successfully used second fallback model")
+            except Exception as e3:
+                logger.error("Second fallback model also failed: %s", str(e3))
+                logger.info("Falling back to default response")
+                return {
+                    "sentiment": "Neutral",
+                    "urgency": "Medium",
+                    "keywords": [],
+                    "intent": "Other",
+                    "entities": {}
+                }
+
+    content = response.choices[0].message.content.strip()
+    logger.info("Raw model output:\n%s", content)
+
+    try:
+        cleaned = clean_json_response(content)
+        logger.debug("Cleaned JSON: %s", cleaned)
+
+        result = json.loads(cleaned)
+        
+        # Validate the result has all required fields
+        expected_keys = ["sentiment", "urgency", "keywords", "intent", "entities"]
+        if not all(key in result for key in expected_keys):
+            missing_keys = [key for key in expected_keys if key not in result]
+            logger.warning("Missing expected keys in LLM response: %s", str(missing_keys))
+            # Add any missing keys with default values
+            if "sentiment" not in result:
+                result["sentiment"] = "Neutral"
+            if "urgency" not in result:
+                result["urgency"] = "Medium"
+            if "keywords" not in result:
+                result["keywords"] = []
+            if "intent" not in result:
+                result["intent"] = "Other"
+            if "entities" not in result:
+                result["entities"] = {}
+        
+        return result
+    except (json.JSONDecodeError, ValueError) as e:
+        logger.error("Error parsing response: %s", str(e))
+        return {
+            "sentiment": "Neutral",
+            "urgency": "Medium",
+            "keywords": [],
+            "intent": "Other",
+            "entities": {}
+        }
 
 def determine_urgency(text: str) -> str:
     """Determine the urgency level based on keywords in the text"""
@@ -281,175 +487,70 @@ def determine_intent(text: str) -> str:
     if any(keyword in text_lower for keyword in INTENT_KEYWORDS["follow-up"]):
         return IntentEnum.FOLLOW_UP.value
     
+    # Then check for incident/complaint as it's a high priority case
+    if any(keyword in text_lower for keyword in INTENT_KEYWORDS["incident"]):
+        return IntentEnum.INCIDENT.value
+    
     # Then check other intents
     for intent, keywords in INTENT_KEYWORDS.items():
-        if intent != "follow-up" and any(keyword in text_lower for keyword in keywords):
+        if intent not in ["follow-up", "incident"] and any(keyword in text_lower for keyword in keywords):
             return intent.capitalize()
     
     return IntentEnum.OTHER.value
 
-def analyze_email(email_text: str, additional_details: Optional[Dict[str, Any]] = None, request_data: Optional[Dict[str, Any]] = None) -> dict:
+def extract_entities(text: str, additional_details: Optional[Dict[str, Any]] = None, request_data: Optional[Dict[str, Any]] = None) -> dict:
     """
-    Enhanced email analyzer that combines regex-based entity extraction and LLM analysis
+    Enhanced entity extraction that uses LLM as the primary method
     """
     # Split the email text into subject and body if it has a "Subject:" line
     subject = ""
-    body = email_text
+    body = text
     
-    if email_text.startswith("Subject:"):
-        parts = email_text.split("\n\n", 1)
+    if text.startswith("Subject:"):
+        parts = text.split("\n\n", 1)
         subject = parts[0].replace("Subject:", "").strip()
         body = parts[1] if len(parts) > 1 else ""
     
-    # Extract entities from the entire request data
-    entities = {}
-    
-    # Extract from email subject and body
-    subject_entities = extract_entities(subject)
-    body_entities = extract_entities(body)
-    entities.update({**body_entities, **subject_entities})
-    
-    # Extract from additional details if present
+    # Prepare the full email content for LLM analysis
+    full_email_content = f"""Subject: {subject if subject else request_data.get('email_subject', '')}
+
+{body if body else request_data.get('email_body', '')}"""
+
+    # Add any additional details to the content
     if additional_details:
-        # Convert additional details to a string for entity extraction
-        additional_text = "\n".join([f"{k}: {v}" for k, v in additional_details.items()])
-        additional_entities = extract_entities(additional_text)
-        entities.update(additional_entities)
-        # Also include the additional details as is
-        entities.update(additional_details)
+        full_email_content += "\n\nAdditional Details:\n" + "\n".join([f"{k}: {v}" for k, v in additional_details.items()])
     
-    # Extract from request data if present
+    # Add request data if present
     if request_data:
-        # Extract from email_subject and email_body
-        if "email_subject" in request_data:
-            subject_entities = extract_entities(request_data["email_subject"])
-            entities.update(subject_entities)
-        if "email_body" in request_data:
-            body_entities = extract_entities(request_data["email_body"])
-            entities.update(body_entities)
-        
-        # Extract from sender and recipient
         if "sender" in request_data:
-            entities["sender_email"] = request_data["sender"]
+            full_email_content += f"\n\nSender: {request_data['sender']}"
         if "recipient" in request_data:
-            entities["recipient_email"] = request_data["recipient"]
-        
-        # Extract from additional_details if present in request_data
-        if "additional_details" in request_data:
-            additional_entities = extract_entities(str(request_data["additional_details"]))
-            entities.update(additional_entities)
-            entities.update(request_data["additional_details"])
+            full_email_content += f"\n\nRecipient: {request_data['recipient']}"
     
-    # Remove any entities with "N/A" values or empty strings
-    entities = {k: v for k, v in entities.items() if v != "N/A" and v != ""}
+    # Have LLM analyze the content
+    result = analyze_email_content(full_email_content, {})
     
-    # Determine initial urgency based on keywords
-    rule_based_urgency = determine_urgency(email_text)
-    
-    # Determine initial intent based on keywords
-    rule_based_intent = determine_intent(email_text)
-    
-    # Format additional details for the prompt
-    additional_details_text = ""
-    if additional_details:
-        additional_details_text = "\nAdditional Context:\n" + "\n".join([f"- {k}: {v}" for k, v in additional_details.items()])
-    
-    # Updated prompt to request more structured JSON output with correct entities format
-    prompt = f"""
-    Analyze this ServiceNow email and return a JSON object with these exact fields:
+    return result
 
-    1. intent (MUST be one of these exact values):
-       - "Follow-up": For status checks, update requests, or following up on existing issues
-       - "Incident": For new issues being reported for the first time
-       - "Request": For general requests or asking for something
-       - "Question": For emails primarily asking questions
-       - "Information": For providing information or updates
-       - "Task Assignment": For assigning or requesting task assignments
-       - "Change": For change requests or modifications
-       - "Problem": For problem management or root cause analysis
-       - "Other": Only if none of the above categories fit
-
-    2. sentiment: "Positive", "Neutral", or "Negative"
-    3. urgency: "High", "Medium", or "Low"
-    4. keywords: List of 5 most important keywords
-    5. entities: IMPORTANT - Only include entities that are EXPLICITLY mentioned in the email. Do not infer or assume any entities.
-       DO NOT include any entities with null values. Only include entities that have actual values.
-       DO NOT include nested objects with null values. Only include the specific entity fields that have values.
-
-       For example, if only customer_type has a value, include it directly:
-       {{
-         "customer_type": "Customer",
-         "store_id": "112",
-         "order_id": "ORD789456"
-       }}
-
-       NOT like this:
-       {{
-         "Customer Information": {{
-           "customer_type": "Customer",
-           "customer_priority": null,
-           ...
-         }}
-       }}
-
-       A. ServiceNow Records (only if explicitly mentioned):
-          - incident_number: ServiceNow incident numbers (e.g., "INC0023487")
-          - change_request: Change request numbers (e.g., "CHG123456")
-          - problem_number: Problem record numbers (e.g., "PRB789012")
-          - task_number: Task numbers (e.g., "TASK123456")
-          - request_number: Request numbers (e.g., "REQ123456")
-
-       B. Customer Information (only if explicitly mentioned):
-          - customer_type: "Employee", "Customer", "Partner", "Vendor", "Contractor", "External User", "Internal User", "Guest", "End User"
-          - customer_priority: "Critical", "High", "Medium", "Low", "P1", "P2", "P3", "P4"
-          - customer_impact: "High", "Medium", "Low", "None", "Business Critical", "Business Important", "Business Normal"
-          - customer_location: "Office", "Remote", "Home", "Field", "Branch", "Headquarters", "Data Center", "Store", "Site"
-          - customer_department: "IT", "HR", "Finance", "Sales", "Marketing", "Operations", "Customer Service", "Support", "Development", "Engineering", "Product"
-          - customer_role: "Manager", "Director", "VP", "C-Level", "Admin", "User", "Developer", "Analyst", "Specialist", "Consultant", "Coordinator"
-
-       C. ServiceNow Services (only if explicitly mentioned):
-          - business_service: One of these exact values:
-            * "IT Service Management" (for Service Desk, Help Desk, ITSM)
-            * "IT Operations Management" (for ITOM, Infrastructure)
-            * "IT Business Management" (for ITBM, Project Management)
-            * "Customer Service Management" (for CSM, Customer Support)
-            * "Human Resources Service Delivery" (for HRSD, HR Services)
-            * "Security Operations" (for SecOps, Security)
-            * "Governance, Risk, and Compliance" (for GRC, Compliance)
-
-       D. Ticket Information (only if explicitly mentioned):
-          - priority: "Critical", "High", "Medium", "Low"
-          - category: The main category of the issue
-          - subcategory: More specific category
-          - assignment_group: Team or group
-          - affected_ci: Affected configuration item
-          - state: "New", "In Progress", "Pending", "Resolved", "Closed"
-
-       E. Contact Information (only if explicitly mentioned):
-          - sender_email: Email address of the sender
-          - recipient_email: Email address of the recipient
-
-    6. summary: Brief 25-word summary
-    7. generated_reply: Professional response that:
-       - Acknowledges the specific issue
-       - References any incident numbers
-       - Indicates investigation will occur
-       - DOES NOT ask for information that is already provided in the email
-       - Uses information already available (like order IDs, customer names, etc.) without asking for them again
-
-    Email to analyze:
-    Subject: {subject}
-    Body: {body}
-    {additional_details_text}
-
-    Return ONLY a valid JSON object. No explanations or markdown. DO NOT include any null values in the entities.
+def analyze_email(email_text: str) -> dict:
     """
-    
-    logger.info("Attempting to use primary model: mistralai/Mistral-7B-Instruct-v0.1")
-    logger.info("Complete prompt being sent to model:\n%s", prompt)
-    
-    # Use try-except for API call to handle potential Together AI service issues
+    Analyzes email content and generates an appropriate reply
+    """
+    # Prepare the prompt for the LLM
+    prompt = f"""Analyze this email and generate an appropriate reply:
+
+Email Content:
+{email_text}
+
+Please provide a JSON response with the following structure:
+{{
+    "generated_reply": "Your suggested reply to the email"
+}}
+
+Focus on generating a professional and helpful response."""
+
     try:
+        # Try primary model first
         response = client.chat.completions.create(
             model="mistralai/Mistral-7B-Instruct-v0.1",
             messages=[{"role": "user", "content": prompt}],
@@ -473,16 +574,9 @@ def analyze_email(email_text: str, additional_details: Optional[Dict[str, Any]] 
             logger.info("Successfully used fallback model")
         except Exception as e2:
             logger.error("Fallback model also failed: %s", str(e2))
-            logger.info("Falling back to rule-based analysis")
-            # Return a default response with our extracted entities when API completely fails
+            logger.info("Falling back to default reply")
             return {
-                "sentiment": "Neutral",
-                "urgency": rule_based_urgency,
-                "keywords": [],
-                "generated_reply": "Thank you for your email. I will review and respond to your message shortly.",
-                "entities": entities,
-                "intent": "Other",
-                "summary": subject if subject else "Email received"
+                "generated_reply": "Thank you for your email. I will review and respond to your message shortly."
             }
 
     content = response.choices[0].message.content.strip()
@@ -494,116 +588,18 @@ def analyze_email(email_text: str, additional_details: Optional[Dict[str, Any]] 
 
         result = json.loads(cleaned)
         
-        # Validate the result has all required fields
-        expected_keys = ["sentiment", "urgency", "keywords", "generated_reply", "intent", "summary", "entities"]
-        if not all(key in result for key in expected_keys):
-            missing_keys = [key for key in expected_keys if key not in result]
-            logger.warning("Missing expected keys in LLM response: %s", str(missing_keys))
-            logger.warning("Available keys in response: %s", str(list(result.keys())))
-            # Add any missing keys with default values
-            if "sentiment" not in result:
-                logger.info("Adding default sentiment: Neutral")
-                result["sentiment"] = "Neutral"
-            if "urgency" not in result:
-                logger.info("Adding default urgency: %s", str(rule_based_urgency))
-                result["urgency"] = rule_based_urgency
-            if "keywords" not in result:
-                logger.info("Adding default keywords: []")
-                result["keywords"] = []
-            if "generated_reply" not in result:
-                logger.info("Adding default response")
-                result["generated_reply"] = "I received your email and will get back to you shortly."
-            if "intent" not in result:
-                logger.info("Adding default intent: Other")
-                result["intent"] = "Other"
-            if "summary" not in result:
-                logger.info("Adding default summary")
-                result["summary"] = subject if subject else "Email received"
-            if "entities" not in result:
-                logger.info("Using extracted entities")
-                result["entities"] = entities
+        # Validate the result has the required field
+        if "generated_reply" not in result:
+            logger.warning("Missing generated_reply in LLM response")
+            result["generated_reply"] = "Thank you for your email. I will review and respond to your message shortly."
         
-        # Ensure entity structure is correct
-        if "entities" not in result or not isinstance(result["entities"], dict):
-            # Use our regex-extracted entities
-            result["entities"] = entities
-        else:
-            # Merge LLM-identified entities with our regex entities, giving priority to regex ones
-            result["entities"] = {**result["entities"], **entities}
-        
-        # Remove business_service if it's just "Desk"
-        if result["entities"].get("business_service") == "Desk":
-            result["entities"].pop("business_service")
-        
-        # Normalize urgency to match enum values
-        if result.get("urgency") and isinstance(result["urgency"], str):
-            urgency_lower = result["urgency"].lower()
-            if "high" in urgency_lower:
-                result["urgency"] = UrgencyEnum.HIGH.value
-            elif "medium" in urgency_lower or "med" in urgency_lower:
-                result["urgency"] = UrgencyEnum.MEDIUM.value
-            elif "low" in urgency_lower:
-                result["urgency"] = UrgencyEnum.LOW.value
-            else:
-                result["urgency"] = rule_based_urgency
-        else:
-            result["urgency"] = rule_based_urgency
-            
-        # Normalize intent to match enum values
-        if result.get("intent") and isinstance(result["intent"], str):
-            intent_lower = result["intent"].lower()
-            # Check for follow-up first as it's a specific case
-            if any(phrase in intent_lower for phrase in INTENT_KEYWORDS["follow-up"]):
-                result["intent"] = IntentEnum.FOLLOW_UP.value
-            elif "request" in intent_lower:
-                result["intent"] = IntentEnum.REQUEST.value
-            elif "information" in intent_lower:
-                result["intent"] = IntentEnum.INFORMATION.value
-            elif "question" in intent_lower:
-                result["intent"] = IntentEnum.QUESTION.value
-            elif "task" in intent_lower and "assignment" in intent_lower:
-                result["intent"] = IntentEnum.TASK_ASSIGNMENT.value
-            elif "incident" in intent_lower:
-                result["intent"] = IntentEnum.INCIDENT.value
-            elif "change" in intent_lower:
-                result["intent"] = IntentEnum.CHANGE.value
-            elif "problem" in intent_lower:
-                result["intent"] = IntentEnum.PROBLEM.value
-            else:
-                result["intent"] = IntentEnum.OTHER.value
-        else:
-            result["intent"] = rule_based_intent
-            
-        # Normalize sentiment to match enum values
-        if result.get("sentiment") and isinstance(result["sentiment"], str):
-            sentiment_lower = result["sentiment"].lower()
-            if "positive" in sentiment_lower:
-                result["sentiment"] = SentimentEnum.POSITIVE.value
-            elif "negative" in sentiment_lower:
-                result["sentiment"] = SentimentEnum.NEGATIVE.value
-            else:
-                result["sentiment"] = SentimentEnum.NEUTRAL.value
-        else:
-            result["sentiment"] = SentimentEnum.NEUTRAL.value
-            
-        # Ensure keywords is a list
-        if not isinstance(result.get("keywords", []), list):
-            result["keywords"] = []
-            
         # Ensure generated_reply is a string and not empty
         if not result.get("generated_reply") or not isinstance(result["generated_reply"], str):
-            result["generated_reply"] = "I received your email and will get back to you shortly."
+            result["generated_reply"] = "Thank you for your email. I will review and respond to your message shortly."
             
         return result
     except (json.JSONDecodeError, ValueError) as e:
         logger.error("Error parsing response: %s", str(e))
-        # Return a reasonable default response with our extracted entities
         return {
-            "sentiment": "Neutral",
-            "urgency": rule_based_urgency,
-            "keywords": [],
-            "generated_reply": "Thank you for your email. I will review and respond to your message shortly.",
-            "entities": entities,
-            "intent": "Other",
-            "summary": subject if subject else "Email received"
+            "generated_reply": "Thank you for your email. I will review and respond to your message shortly."
         }
