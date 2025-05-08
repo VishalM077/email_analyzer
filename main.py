@@ -42,9 +42,10 @@ class EmailContentRequest(BaseModel):
 
 # Define the response models with enhanced fields
 class EntityExtractionResponse(BaseModel):
+    category: str
     intent: str
-    sentiment: str
     urgency: str
+    sentiment: str
     keywords: List[str]
     entities: Dict[str, Any]
 
@@ -70,9 +71,10 @@ async def extract_entities_endpoint(email_request: EmailRequest):
     Analyzes an email and extracts entities, intent, sentiment, urgency, and keywords.
     
     The analysis includes:
-    - Intent detection (question, request, etc.)
-    - Sentiment analysis
-    - Urgency assessment
+    - Category detection (Customer/Agent)
+    - Intent detection (report_issue, request_support, etc.)
+    - Sentiment analysis (positive, neutral, negative, stressed, angry)
+    - Urgency assessment (low, medium, high, critical)
     - Keyword extraction
     - Entity recognition (dates, order numbers, etc.)
     """
@@ -97,15 +99,16 @@ async def extract_entities_endpoint(email_request: EmailRequest):
         
         # Return properly structured response with all the enhanced fields
         result = EntityExtractionResponse(
-            intent=analysis.get("intent", "Other"),
-            sentiment=analysis.get("sentiment", "Neutral"),
-            urgency=analysis.get("urgency", "Medium"),
-            keywords=analysis.get("keywords", [])[:5],  # Limit to max 5 keywords
+            category=analysis.get("category", "Customer"),
+            intent=analysis.get("intent", "other"),
+            sentiment=analysis.get("sentiment", "neutral"),
+            urgency=analysis.get("urgency", "medium"),
+            keywords=analysis.get("keywords", [])[:10],  # Limit to max 10 keywords
             entities=analysis.get("entities", {})
         )
         
         processing_time = time.time() - start_time
-        logger.info(f"Email processed in {processing_time:.2f} seconds. Intent: {result.intent}, Urgency: {result.urgency}")
+        logger.info(f"Email processed in {processing_time:.2f} seconds. Category: {result.category}, Intent: {result.intent}, Urgency: {result.urgency}")
         
         return result
     except Exception as e:

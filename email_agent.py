@@ -56,52 +56,107 @@ def analyze_email_content(text: str) -> dict:
     and extract entities
     """
     # Prepare the prompt for the LLM
-    prompt = f"""Analyze this email and extract key information:
+    prompt = f"""You are an AI assistant that analyzes email content and extracts structured information for downstream processing in a ServiceNow ITSM environment.
 
-Email Content:
+Analyze the following email and return a JSON object with only the information that is clearly present or confidently inferable from the content. Do not guess or invent values. If a field is not mentioned or implied, do not include it.
+
+EMAIL:
+\"\"\"
 {text}
+\"\"\"
 
-Please provide a JSON response with the following structure:
-{{
-    "sentiment": "Positive/Neutral/Negative",
-    "urgency": "High/Medium/Low",
-    "keywords": ["keyword1", "keyword2", "keyword3"],
-    "intent": "Request/Information/Question/Task Assignment/Follow-up/Incident/Change/Problem/Other",
-    "entities": {{
-        // Extract ONLY the most relevant and helpful entities that are EXPLICITLY mentioned in the email.
-        // Focus on information that will be useful for ticket creation and issue resolution.
-        // Examples of useful entities:
-        // - incident_number: Incident/ticket numbers (e.g., INC123456)
-        // - error_code: Error codes or messages (e.g., "401", "403 Forbidden")
-        // - system_name: Name of affected system/application
-        // - issue_type: Type of issue (e.g., "Printer Access Issue")
-        // - issue_location: Where the issue is occurring
-        // - employee_name: Name of affected user
-        // - employee_id: Employee ID or number
-        // - reporter_name: Name of person reporting the issue
-        // - reporter_role: Role of person reporting
-        // - sender_email: Email of sender
-        // - recipient_email: Email of recipient
-        // - reported_time: When the issue was reported
-    }}
-}}
+Return a JSON object with any of the following **top-level keys** and a nested **entities** dictionary:
 
-CRITICAL RULES:
-1. ONLY include entities that are EXPLICITLY mentioned in the email
-2. DO NOT make assumptions or add information that isn't in the text
-3. DO NOT include any keys with null values
-4. For dates, use the exact format mentioned in the email
-5. DO NOT infer or guess values for any fields
-6. If a field's value is not explicitly stated, DO NOT include that field
-7. Preserve exact case and formatting as mentioned in the email
-8. ONLY include entities that will be helpful for ticket creation and issue resolution
-9. Pay special attention to:
-    - Incident/ticket numbers
-    - Error codes and messages
-    - System names and locations
-    - User information
-    - Reporter information
-    - Communication details"""
+---
+
+### TOP-LEVEL KEYS:
+
+- "category": Classify the sender as either:
+  - "customer" — if the sender is an end user requesting help, reporting an issue, or giving feedback.
+  - "agent" — if the sender is a support staff providing an update, resolution, or internal communication.
+
+- "intent": One of:
+  - "report_issue"
+  - "request_support"
+  - "provide_update"
+  - "confirm_resolution"
+  - "escalation"
+  - "follow_up"
+  - "request_information"
+  - "share_information"
+  - "complaint"
+  - "feedback"
+  - "other"
+
+- "urgency": One of:
+  - "low"
+  - "medium"
+  - "high"
+
+- "sentiment": One of:
+  - "positive"
+  - "neutral"
+  - "negative"
+
+- "keywords": A list of up to 10 important and relevant terms or phrases from the email.
+
+---
+
+### ENTITIES (if present, include under a key called "entities"):
+
+The "entities" dictionary should contain **only the fields that are clearly present or implied** in the email. Each field is explained below:
+
+#### Ticket and Record Information
+- "record_type": The kind of record mentioned in the email, such as:
+  - "incident" (for outage or break/fix issues)
+  - "case" (customer service case)
+  - "request" (a general request for service)
+  - "request_item" (a specific item under a request, usually prefixed with RITM)
+  - "change_request" (a formal request to change a system or configuration)
+  - "ticket" (a generic term — try to infer type if possible)
+- "record_number": The unique ID of the record, such as INC0012345, RITM0004567, CHG0001234, CS0005678.
+- "record_table": The system table name for lookup, such as:
+  - "incident"
+  - "sn_customerservice_case"
+  - "sc_request"
+  - "sc_req_item"
+  - "change_request"
+
+#### Contact and User Info
+- "reporter_name": Name of the sender of email
+- "sender_email": Sender’s email address
+- "recipient_email": Recipient’s email address
+- "company_name": Organization or customer name
+- "location": Any physical or organizational location (e.g., New York, Floor 3, HR department)
+
+#### Issue and Context
+- "issue": Description of the reported problem or request
+- "product": Product name or model mentioned (e.g., Dell XPS, SAP, Outlook)
+- "service": Service referenced (e.g., payroll, email, VPN)
+- "ci_name": Configuration item (specific system or hardware being discussed)
+- "category": Business category of the issue (e.g., Hardware, Software, Access)
+- "sub_category": More specific sub-classification (e.g., Laptop, VPN, Login)
+- "error_code": Any numeric or string error code mentioned in the email
+
+#### Action History & Status
+- "resolution": Any solution or workaround mentioned by the sender
+- "status_request": If the sender is asking for an update or the current state
+- "next_steps": Any action requested or expected to be taken next
+- "action_taken": Troubleshooting or steps already performed by the sender
+
+#### Workflow & External References
+- "order_id": If the email references a specific order or purchase
+- "date_time": Any time or date explicitly mentioned
+- "reason": The cause or explanation for an issue or delay
+- "has_attachments": Boolean value (true/false) if the email mentions an attachment
+- "reference_links": Any URLs or hyperlinks included or mentioned in the email
+
+---
+
+### FINAL INSTRUCTIONS:
+
+Return only a properly formatted JSON object. Do not include keys that are not confidently extractable. Do not include nulls or empty fields. Infer intent, urgency, and sentiment only if clearly implied by the text.
+"""
 
     try:
         response = client.chat.completions.create(
@@ -115,10 +170,11 @@ CRITICAL RULES:
     except Exception as e:
         logger.error("Model failed: %s", str(e))
         return {
-            "sentiment": "Neutral",
-            "urgency": "Medium",
+            "category": "Customer",
+            "intent": "other",
+            "urgency": "medium",
+            "sentiment": "neutral",
             "keywords": [],
-            "intent": "Other",
             "entities": {}
         }
 
@@ -132,19 +188,21 @@ CRITICAL RULES:
         result = json.loads(cleaned)
         
         # Validate the result has all required fields
-        expected_keys = ["sentiment", "urgency", "keywords", "intent", "entities"]
+        expected_keys = ["category", "intent", "urgency", "sentiment", "keywords", "entities"]
         if not all(key in result for key in expected_keys):
             missing_keys = [key for key in expected_keys if key not in result]
             logger.warning("Missing expected keys in LLM response: %s", str(missing_keys))
             # Add any missing keys with default values
-            if "sentiment" not in result:
-                result["sentiment"] = "Neutral"
+            if "category" not in result:
+                result["category"] = "Customer"
+            if "intent" not in result:
+                result["intent"] = "other"
             if "urgency" not in result:
-                result["urgency"] = "Medium"
+                result["urgency"] = "medium"
+            if "sentiment" not in result:
+                result["sentiment"] = "neutral"
             if "keywords" not in result:
                 result["keywords"] = []
-            if "intent" not in result:
-                result["intent"] = "Other"
             if "entities" not in result:
                 result["entities"] = {}
             
@@ -152,10 +210,11 @@ CRITICAL RULES:
     except (json.JSONDecodeError, ValueError) as e:
         logger.error("Error parsing response: %s", str(e))
         return {
-            "sentiment": "Neutral",
-            "urgency": "Medium",
+            "category": "Customer",
+            "intent": "other",
+            "urgency": "medium",
+            "sentiment": "neutral",
             "keywords": [],
-            "intent": "Other",
             "entities": {}
         }
 
